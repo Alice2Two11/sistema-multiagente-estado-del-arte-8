@@ -271,7 +271,13 @@ class DraftWritingAgent:
         policy: Mapping[str, Any], #trae las reglas de recuperación configuradas
         strategy: str, #indica qué estrategia de búsqueda se debe usar
         quantitative_context: Mapping[str, Any], #parte de la información cuantitativa del 03B que corresponde específicamente a la sección que el 06 está redactando
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Devuelve ``(evidence, adaptive_retrieval_telemetry)``. El segundo
+        elemento es la única forma auditable de comprobar, corrida por
+        corrida, si ``adaptive_retrieval_enabled`` realmente hizo algo
+        distinto al retrieval estático -- se escribe siempre (también
+        cuando está deshabilitado, con ``adaptive_retrieval_enabled=False``
+        y el resto en ``None``) en ``draft_adaptive_retrieval_trace.csv``."""
         chunks = bundle["chunks"]
 
         # Define los límites de evidencia que se recuperarán para la sección
@@ -300,9 +306,20 @@ class DraftWritingAgent:
                     policy.get("max_additional_retrieval_rounds", 2)
                 ),
             )
-            return result["evidence"]
+            final_grade = result["final_grade"]
+            telemetry = {
+                "adaptive_retrieval_enabled": True,
+                "additional_retrieval_rounds_used": result["additional_retrieval_rounds_used"],
+                "final_query": result["final_query"],
+                "final_grade_result": final_grade["grade_result"] if final_grade else None,
+                "final_grade_reason_codes": (
+                    "|".join(final_grade["reason_codes"]) if final_grade else None
+                ),
+                "minimum_viable_when_insufficient": result["minimum_viable_when_insufficient"],
+            }
+            return result["evidence"], telemetry
 
-        return retrieve_section_evidence(
+        evidence = retrieve_section_evidence(
             section,
             self.runtime.collection,
             chunks,
@@ -311,6 +328,15 @@ class DraftWritingAgent:
             min_relevance_score=min_relevance_score,
             min_overlap_tokens=min_overlap_tokens,
         )
+        telemetry = {
+            "adaptive_retrieval_enabled": False,
+            "additional_retrieval_rounds_used": 0,
+            "final_query": None,
+            "final_grade_result": None,
+            "final_grade_reason_codes": None,
+            "minimum_viable_when_insufficient": None,
+        }
+        return evidence, telemetry
 
     # devuelve el resultado oficial del agente indicando que esa sección falló la validación, 
     # junto con toda la información necesaria para saber qué pasó y por qué.
@@ -533,6 +559,7 @@ class DraftWritingAgent:
 
             generated: list[dict[str, Any]] = []
             all_evidence: list[dict[str, Any]] = []
+            adaptive_retrieval_trace_rows: list[dict[str, Any]] = []
             attempt_logs: dict[str, list[dict[str, Any]]] = {}
 
             # --- Reutilización dirigida en modo REVISION ---
@@ -561,12 +588,15 @@ class DraftWritingAgent:
                     bundle,
                     int(policy["max_quantitative_rows_per_section"]),
                 )
-                evidence = self._retrieve_section_evidence(
+                evidence, adaptive_retrieval_telemetry = self._retrieve_section_evidence(
                     section,
                     bundle,
                     policy,
                     strategy,
                     quant_context,
+                )
+                adaptive_retrieval_trace_rows.append(
+                    {"section_id": sid, "section_query": section_query, **adaptive_retrieval_telemetry}
                 )
                 if section.get("papers_to_use"):
                     retrieval_rounds += 1
@@ -982,6 +1012,7 @@ class DraftWritingAgent:
                 section_rows,
                 claim_rows,
                 numeric_rows,
+                adaptive_retrieval_trace_rows,
             )
             # Devuelve el resultado final cuando el borrador pasó la validación
             # y autoriza avanzar al agente verificador.

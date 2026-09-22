@@ -23,6 +23,14 @@ NAMES = (
     "quantitative_comparative_table_used.csv",
     "dataset_technique_summary_used.csv",
     "draft_generation_manifest.json",
+    # Telemetría de recuperación adaptativa (agentic retrieval en 06) --
+    # una fila por sección, siempre presente (también con
+    # adaptive_retrieval_enabled=False), para poder comprobar sin
+    # ambigüedad si el ciclo REWRITE_QUERY/ADJUST_TOP_K realmente
+    # consumió rondas adicionales en una corrida dada. NO forma parte de
+    # `required_reuse` en draft_writing_agent.py -- manifiestos de
+    # corridas previas a este archivo se siguen pudiendo reutilizar.
+    "draft_adaptive_retrieval_trace.csv",
 )
 
 QUANTITATIVE_USED_COLUMNS = (
@@ -127,6 +135,7 @@ def write_draft_artifacts(
     section_rows,
     claim_rows,
     numeric_rows,
+    adaptive_retrieval_trace_rows=(),
 ):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -216,6 +225,19 @@ def write_draft_artifacts(
             ensure_ascii=False,
             indent=2,
         ),
+        "draft_adaptive_retrieval_trace.csv": pd.DataFrame(
+            list(adaptive_retrieval_trace_rows),
+            columns=[
+                "section_id",
+                "section_query",
+                "adaptive_retrieval_enabled",
+                "additional_retrieval_rounds_used",
+                "final_query",
+                "final_grade_result",
+                "final_grade_reason_codes",
+                "minimum_viable_when_insufficient",
+            ],
+        ).to_csv(index=False),
     }
     artifacts = {}
     for name, text in payloads.items():
