@@ -37,6 +37,15 @@ DEFAULT_DRAFT_WRITING_POLICY: dict[str, Any] = {
     # None => no se permite ADJUST_TOP_K (solo REWRITE_QUERY); si se fija,
     # debe ser >= top_k_evidence_per_section.
     "agentic_retrieval_effective_top_k_max": None,
+    # Recalibración de min_lexical_overlap_ratio del grader (default en 07:
+    # 0.15) -- confirmado empíricamente (experimento_paper_51,
+    # draft_adaptive_retrieval_trace.csv) que ese umbral, heredado de
+    # claims cortos de 07, es casi inalcanzable contra las queries de 06
+    # (párrafo completo: título+propósito+key_arguments+evidence_needs),
+    # produciendo LOW_COVERAGE de forma casi garantizada. None => conserva
+    # el default de 07 sin cambios; ver
+    # src/tools/draft_writing/agentic_retrieval.py::build_grader_thresholds.
+    "agentic_retrieval_min_lexical_overlap_ratio": 0.06,
 }
 
 _ALLOWED_RETRIEVAL_STRATEGIES = {
@@ -188,6 +197,19 @@ def validate_draft_writing_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
                 "must_be_none_or_integer_greater_than_or_equal_to_top_k_evidence_per_section"
             )
     validated["agentic_retrieval_effective_top_k_max"] = top_k_max
+
+    min_overlap_ratio = validated.get("agentic_retrieval_min_lexical_overlap_ratio")
+    if min_overlap_ratio is not None:
+        if (
+            isinstance(min_overlap_ratio, bool)
+            or not isinstance(min_overlap_ratio, (int, float))
+            or not (0.0 <= float(min_overlap_ratio) <= 1.0)
+        ):
+            raise ValueError(
+                "DRAFT_POLICY_INVALID:agentic_retrieval_min_lexical_overlap_ratio:"
+                "must_be_none_or_number_in_0_1"
+            )
+    validated["agentic_retrieval_min_lexical_overlap_ratio"] = min_overlap_ratio
 
     return validated
 

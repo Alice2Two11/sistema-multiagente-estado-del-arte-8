@@ -36,7 +36,23 @@ término nuevo se recurre a ADJUST_TOP_K. Esto evita una llamada LLM
 adicional por sección durante la redacción (costo/latencia). Si se
 necesita paridad exacta con el planner LLM de 07, es un cambio de alcance
 distinto, no cubierto aquí.
-"""
+
+MIN_LEXICAL_OVERLAP_RATIO -- recalibrado para 06 (ver
+``build_grader_thresholds``): ``DEFAULT_GRADER_THRESHOLDS`` (0.15) se
+calibró en 07 contra claims cortos (una oración). ``build_section_query``
+de 06 arma en cambio un párrafo entero (título + propósito +
+key_arguments + evidence_needs, típicamente 80-100+ términos), así que el
+denominador de ``lexical_overlap_ratio`` es mucho más grande y ese 0.15
+casi nunca se alcanza. Confirmado empíricamente en una corrida real
+(``experimento_paper_51``, telemetría en
+``draft_adaptive_retrieval_trace.csv``): 5 de 7 secciones agotaron el
+presupuesto completo de reintentos y terminaron ``INSUFFICIENT`` por
+``LOW_COVERAGE`` en las 5, con ``final_query`` idéntica a
+``section_query`` en TODAS -- es decir, ``expand_section_query`` nunca
+encontró un solo término nuevo que agregar (la query ya es tan rica que
+casi cualquier término de la evidencia ya está presente en ella), y
+``ADJUST_TOP_K`` tampoco resolvía nunca el ``LOW_COVERAGE`` porque el
+problema es el denominador, no la cantidad de candidatos."""
 
 from __future__ import annotations
 
@@ -110,6 +126,21 @@ def _authorized_sources_for_section(section: dict[str, Any]) -> frozenset[str]:
         for paper in (section.get("papers_to_use") or [])
     ]
     return frozenset(name for name in names if name)
+
+
+def build_grader_thresholds(*, min_lexical_overlap_ratio: float | None = None) -> dict[str, Any]:
+    """Construye los thresholds del grader de 06 partiendo de
+    ``DEFAULT_GRADER_THRESHOLDS`` (Stage 07) y permitiendo recalibrar
+    únicamente ``min_lexical_overlap_ratio`` -- ver la nota
+    ``MIN_LEXICAL_OVERLAP_RATIO`` en el docstring del módulo para el
+    porqué. ``min_lexical_overlap_ratio=None`` conserva el default de 07
+    sin cambios (0.15); el llamador (``draft_writing_agent.py``) lo
+    resuelve desde la policy opcional
+    ``agentic_retrieval_min_lexical_overlap_ratio``."""
+    thresholds = dict(DEFAULT_GRADER_THRESHOLDS)
+    if min_lexical_overlap_ratio is not None:
+        thresholds["min_lexical_overlap_ratio"] = min_lexical_overlap_ratio
+    return validate_grader_thresholds(thresholds)
 
 
 def grade_section_evidence(

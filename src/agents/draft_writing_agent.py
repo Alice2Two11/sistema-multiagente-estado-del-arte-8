@@ -47,7 +47,10 @@ from src.tools.draft_writing.retrieval import (
     build_section_query,
     retrieve_section_evidence,
 )
-from src.tools.draft_writing.agentic_retrieval import retrieve_section_evidence_adaptive
+from src.tools.draft_writing.agentic_retrieval import (
+    build_grader_thresholds,
+    retrieve_section_evidence_adaptive,
+)
 from src.tools.shared.stage_failure import build_stage_failure_result, classify_stage_exception
 from src.tools.shared.stage_reuse import resolve_stage_reuse_decision
 from src.tools.draft_writing.validation import (
@@ -293,6 +296,11 @@ class DraftWritingAgent:
         # por defecto: sin este flag el comportamiento es exactamente el
         # retrieval estático original de una sola pasada.
         if bool(policy.get("adaptive_retrieval_enabled", False)):
+            grader_thresholds = build_grader_thresholds(
+                min_lexical_overlap_ratio=policy.get(
+                    "agentic_retrieval_min_lexical_overlap_ratio"
+                )
+            )
             result = retrieve_section_evidence_adaptive(
                 section=section,
                 collection=self.runtime.collection,
@@ -305,6 +313,7 @@ class DraftWritingAgent:
                 max_additional_retrieval_rounds=int(
                     policy.get("max_additional_retrieval_rounds", 2)
                 ),
+                grader_thresholds=grader_thresholds,
             )
             final_grade = result["final_grade"]
             telemetry = {
@@ -316,6 +325,7 @@ class DraftWritingAgent:
                     "|".join(final_grade["reason_codes"]) if final_grade else None
                 ),
                 "minimum_viable_when_insufficient": result["minimum_viable_when_insufficient"],
+                "min_lexical_overlap_ratio_used": grader_thresholds["min_lexical_overlap_ratio"],
             }
             return result["evidence"], telemetry
 
@@ -335,6 +345,7 @@ class DraftWritingAgent:
             "final_grade_result": None,
             "final_grade_reason_codes": None,
             "minimum_viable_when_insufficient": None,
+            "min_lexical_overlap_ratio_used": None,
         }
         return evidence, telemetry
 
