@@ -46,6 +46,21 @@ DEFAULT_DRAFT_WRITING_POLICY: dict[str, Any] = {
     # el default de 07 sin cambios; ver
     # src/tools/draft_writing/agentic_retrieval.py::build_grader_thresholds.
     "agentic_retrieval_min_lexical_overlap_ratio": 0.06,
+    # Escotilla de escape adicional -- SOLO para 06, nunca tocó
+    # DEFAULT_GRADER_THRESHOLDS/validate_grader_thresholds (contrato
+    # compartido con Stage 07). Diagnóstico empírico (experimento_paper_51
+    # Y experimento_paper_52, dos temas distintos): la sección "cajón de
+    # sastre" que agrupa sub-temas dispares en key_arguments/evidence_needs
+    # genera un section_query TAN largo que ni siquiera 0.06 de ratio es
+    # alcanzable -- el denominador crece más rápido que el numerador. Un
+    # conteo ABSOLUTO de términos compartidos (que NO escala con la
+    # longitud de la query) le da a esas secciones una vía de salida sin
+    # debilitar el umbral de ratio de las demás secciones, que sí
+    # funcionan bien con 0.06. Solo hace el chequeo MÁS PERMISIVO, nunca
+    # más estricto -- None desactiva la escotilla (comportamiento idéntico
+    # a antes de este campo). Ver
+    # src/tools/draft_writing/agentic_retrieval.py::grade_section_evidence.
+    "agentic_retrieval_min_absolute_lexical_overlap_terms": 5,
 }
 
 _ALLOWED_RETRIEVAL_STRATEGIES = {
@@ -210,6 +225,23 @@ def validate_draft_writing_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
                 "must_be_none_or_number_in_0_1"
             )
     validated["agentic_retrieval_min_lexical_overlap_ratio"] = min_overlap_ratio
+
+    min_absolute_overlap_terms = validated.get(
+        "agentic_retrieval_min_absolute_lexical_overlap_terms"
+    )
+    if min_absolute_overlap_terms is not None:
+        if (
+            isinstance(min_absolute_overlap_terms, bool)
+            or not isinstance(min_absolute_overlap_terms, int)
+            or min_absolute_overlap_terms < 0
+        ):
+            raise ValueError(
+                "DRAFT_POLICY_INVALID:agentic_retrieval_min_absolute_lexical_overlap_terms:"
+                "must_be_none_or_integer_greater_than_or_equal_to_0"
+            )
+    validated["agentic_retrieval_min_absolute_lexical_overlap_terms"] = (
+        min_absolute_overlap_terms
+    )
 
     return validated
 

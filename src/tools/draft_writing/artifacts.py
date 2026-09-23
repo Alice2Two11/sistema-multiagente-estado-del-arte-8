@@ -237,6 +237,8 @@ def write_draft_artifacts(
                 "final_grade_reason_codes",
                 "minimum_viable_when_insufficient",
                 "min_lexical_overlap_ratio_used",
+                "min_absolute_lexical_overlap_terms_used",
+                "final_grade_lexical_overlap_term_count",
             ],
         ).to_csv(index=False),
     }

@@ -214,7 +214,8 @@ def build_source_free_organizational_section(section, output_language="español"
 # al template estático histórico -- nunca deja una sección sin texto.
 # ------------------------------------------------------------------
 
-_ORGANIZATIONAL_FORBIDDEN_RE = re.compile(r"\d|\[[^\]]*\]")
+_ORGANIZATIONAL_BRACKET_RE = re.compile(r"\[[^\]]*\]")
+_ORGANIZATIONAL_NUMERIC_TOKEN_RE = re.compile(r"\d+(?:[.,]\d+)*%?")
 
 
 def _organizational_role(section):
@@ -245,12 +246,15 @@ _ORGANIZATIONAL_ROLE_INSTRUCTIONS = {
         "enumerarlas una por una como una lista)."
     ),
     "conclusion": (
-        "Escribe una CONCLUSIÓN real para este estado del arte: sintetiza, "
-        "en tus propias palabras, los hallazgos y tensiones más importantes "
-        "que ya se desarrollaron en las secciones resumidas abajo, y cierra "
-        "señalando de forma general hacia dónde apunta el trabajo futuro del "
-        "área -- sin inventar ningún hallazgo, cifra o comparación que no "
-        "esté ya reflejada en esos resúmenes."
+        "Escribe una CONCLUSIÓN real para este estado del arte: retoma "
+        "EXPLÍCITAMENTE 2 o 3 hallazgos concretos ya presentados en las "
+        "secciones resumidas abajo (si alguno incluye una cifra concreta -- "
+        "ej. una métrica de precisión -- cópiala EXACTAMENTE como aparece en "
+        "el contexto, nunca la inventes ni la redondees), sintetiza en tus "
+        "propias palabras la tensión o el patrón que esos hallazgos "
+        "comparten, y cierra señalando hacia dónde apunta el trabajo futuro "
+        "del área -- sin inventar ningún hallazgo, cifra o comparación que "
+        "no esté ya reflejada en esos resúmenes."
     ),
     "gaps": (
         "Sintetiza, en tus propias palabras, los vacíos y limitaciones que "
@@ -269,6 +273,24 @@ _ORGANIZATIONAL_ROLE_INSTRUCTIONS = {
 }
 
 
+def build_organizational_context_block(context_sections):
+    """Arma el bloque CONTEXTO compartido por el prompt de síntesis
+    (``build_organizational_synthesis_prompt``) y por la validación
+    determinística (``validate_organizational_synthesis``) -- ambos deben
+    ver EXACTAMENTE el mismo texto (incluido el truncado a 600 caracteres
+    por sección) para que una cifra que el LLM copia del contexto real
+    nunca sea rechazada por no encontrarse en un texto distinto al que de
+    verdad se le mostró."""
+    return "\n\n".join(
+        f"- {safe_str(ctx.get('section_title'))}: {safe_str(ctx.get('text'))[:600]}"
+        for ctx in context_sections
+        if safe_str(ctx.get("text")).strip()
+    ) or (
+        "(No hay otras secciones disponibles todavía; usa únicamente el "
+        "título de esta sección como guía temática.)"
+    )
+
+
 def build_organizational_synthesis_prompt(section, context_sections, output_language="español"):
     """``context_sections`` es una lista de ``{"section_title", "text"}``
     de las DEMÁS secciones del esquema: ``text`` es el ``draft_text`` real
@@ -278,14 +300,7 @@ def build_organizational_synthesis_prompt(section, context_sections, output_lang
     la introducción)."""
     section_title = safe_str(section.get("section_title"))
     role_instruction = _ORGANIZATIONAL_ROLE_INSTRUCTIONS[_organizational_role(section)]
-    context_block = "\n\n".join(
-        f"- {safe_str(ctx.get('section_title'))}: {safe_str(ctx.get('text'))[:600]}"
-        for ctx in context_sections
-        if safe_str(ctx.get("text")).strip()
-    ) or (
-        "(No hay otras secciones disponibles todavía; usa únicamente el "
-        "título de esta sección como guía temática.)"
-    )
+    context_block = build_organizational_context_block(context_sections)
     return f"""
 Eres el agente redactor de un sistema multiagente para estados del arte
 científicos, escribiendo AHORA la sección organizativa "{section_title}".
@@ -293,14 +308,17 @@ científicos, escribiendo AHORA la sección organizativa "{section_title}".
 {role_instruction}
 
 REGLAS ESTRICTAS:
-1. NO uses ningún número, cifra, porcentaje ni valor cuantitativo.
+1. Si necesitas retomar una cifra o dato cuantitativo para tu síntesis,
+   ÚSALA EXACTAMENTE como aparece en el CONTEXTO de abajo -- nunca
+   inventes, redondees ni calcules un valor nuevo que no esté ya ahí.
+   Si no hay ninguna cifra relevante en el contexto, no uses ninguna.
 2. NO uses corchetes de cita (ej. "[archivo.pdf | chunk_0001]") ni ningún
    identificador técnico -- esta sección NO tiene evidencia asignada y no
-   debe simular que la tiene.
+   debe simular que la tiene, ni siquiera copiando uno del contexto.
 3. NO nombres ningún autor, dataset, algoritmo o herramienta específica
    que no aparezca ya mencionada en el contexto de abajo.
 4. NO inventes ningún hallazgo, comparación o resultado nuevo -- solo
-   sintetiza, a nivel general, lo que ya está reflejado en el contexto.
+   sintetiza lo que ya está reflejado en el contexto.
 5. {language_instruction(output_language)}
 6. Devuelve ÚNICAMENTE el texto de la sección, en prosa continua (sin
    títulos, sin listas, sin JSON, sin comillas envolventes).
@@ -309,7 +327,7 @@ CONTEXTO (otras secciones del mismo estado del arte, ya redactadas o
 planeadas):
 {context_block}
 
-Extensión objetivo: 2 a 4 oraciones.
+Extensión objetivo: 3 a 6 oraciones.
 """.strip()
 
 
@@ -337,21 +355,42 @@ def extract_plain_text_response(raw):
     return content.strip()
 
 
-def validate_organizational_synthesis(text):
+def validate_organizational_synthesis(text, context_text=""):
     """Guardia determinística (sin LLM), SIEMPRE aplicada antes de
     aceptar un texto organizativo sintetizado por el LLM -- si falla, el
     llamador cae al template estático fijo
     (``build_source_free_organizational_section``), nunca deja pasar
-    texto sin revisar. Rechaza cualquier cifra o corchete de cita
-    (evidencia simulada, prohibida en una sección sin evidencia
-    asignada) y exige una longitud razonable (ni vacío ni desproporcionado)."""
+    texto sin revisar.
+
+    Corchetes de cita: SIEMPRE rechazados (evidencia simulada, prohibida
+    en una sección sin evidencia asignada, ni siquiera copiando uno del
+    contexto).
+
+    Cifras: ya NO se rechazan en bloque -- se permite que la conclusión
+    retome un hallazgo cuantitativo real (ej. una métrica de precisión ya
+    mencionada en el cuerpo del documento), pero SOLO si cada token
+    numérico del texto aparece, LITERAL, dentro de ``context_text`` (el
+    mismo bloque CONTEXTO que se le mostró al LLM --
+    ``build_organizational_context_block``). Cualquier cifra que no esté
+    ahí se trata como inventada y rechaza el texto completo. Si no se pasa
+    ``context_text`` (compatibilidad con llamadores antiguos), se vuelve
+    al comportamiento estricto original: cualquier cifra rechaza.
+
+    También exige una longitud razonable (ni vacío ni desproporcionado)."""
     if not isinstance(text, str):
         return False
     cleaned = text.strip()
     if not cleaned:
         return False
-    if _ORGANIZATIONAL_FORBIDDEN_RE.search(cleaned):
+    if _ORGANIZATIONAL_BRACKET_RE.search(cleaned):
         return False
+    numeric_tokens = _ORGANIZATIONAL_NUMERIC_TOKEN_RE.findall(cleaned)
+    if numeric_tokens:
+        context_text = safe_str(context_text)
+        if not context_text:
+            return False
+        if any(token not in context_text for token in numeric_tokens):
+            return False
     word_count = len(cleaned.split())
     if word_count < 15 or word_count > 220:
         return False

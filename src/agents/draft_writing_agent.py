@@ -42,6 +42,7 @@ from src.tools.draft_writing.prompting import (
     build_source_free_organizational_section,
     build_dynamic_split_example_prompt,
     validate_dynamic_split_example,
+    build_organizational_context_block,
     build_organizational_synthesis_prompt,
     extract_plain_text_response,
     validate_organizational_synthesis,
@@ -308,6 +309,8 @@ class DraftWritingAgent:
                 "final_grade_reason_codes": None,
                 "minimum_viable_when_insufficient": None,
                 "min_lexical_overlap_ratio_used": None,
+                "min_absolute_lexical_overlap_terms_used": None,
+                "final_grade_lexical_overlap_term_count": None,
             }
             return [], telemetry
 
@@ -331,6 +334,9 @@ class DraftWritingAgent:
                     "agentic_retrieval_min_lexical_overlap_ratio"
                 )
             )
+            min_absolute_overlap_terms = policy.get(
+                "agentic_retrieval_min_absolute_lexical_overlap_terms"
+            )
             result = retrieve_section_evidence_adaptive(
                 section=section,
                 collection=self.runtime.collection,
@@ -344,6 +350,7 @@ class DraftWritingAgent:
                     policy.get("max_additional_retrieval_rounds", 2)
                 ),
                 grader_thresholds=grader_thresholds,
+                min_absolute_lexical_overlap_terms=min_absolute_overlap_terms,
             )
             final_grade = result["final_grade"]
             telemetry = {
@@ -356,6 +363,10 @@ class DraftWritingAgent:
                 ),
                 "minimum_viable_when_insufficient": result["minimum_viable_when_insufficient"],
                 "min_lexical_overlap_ratio_used": grader_thresholds["min_lexical_overlap_ratio"],
+                "min_absolute_lexical_overlap_terms_used": min_absolute_overlap_terms,
+                "final_grade_lexical_overlap_term_count": (
+                    final_grade["lexical_overlap_term_count"] if final_grade else None
+                ),
             }
             return result["evidence"], telemetry
 
@@ -376,6 +387,8 @@ class DraftWritingAgent:
             "final_grade_reason_codes": None,
             "minimum_viable_when_insufficient": None,
             "min_lexical_overlap_ratio_used": None,
+            "min_absolute_lexical_overlap_terms_used": None,
+            "final_grade_lexical_overlap_term_count": None,
         }
         return evidence, telemetry
 
@@ -424,6 +437,7 @@ class DraftWritingAgent:
                     }
                 )
 
+        context_block = build_organizational_context_block(context_sections)
         try:
             prompt = build_organizational_synthesis_prompt(
                 section, context_sections, output_language
@@ -433,7 +447,7 @@ class DraftWritingAgent:
         except Exception:
             return fallback(), True
 
-        if not validate_organizational_synthesis(text):
+        if not validate_organizational_synthesis(text, context_text=context_block):
             return fallback(), True
 
         return build_llm_synthesized_organizational_section(section, text), True

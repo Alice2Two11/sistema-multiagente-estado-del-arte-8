@@ -148,16 +148,48 @@ def grade_section_evidence(
     section_query: str,
     candidates: list[dict[str, Any]],
     thresholds: dict | None = None,
+    min_absolute_lexical_overlap_terms: int | None = None,
 ) -> dict[str, Any]:
     """Adaptación de ``agentic_retrieval_grader.grade_evidence`` (Stage 07)
     a evidencia de sección de 06: las mismas 4 señales (conteo de
     candidatos, diversidad de fuentes, relevancia máxima, cobertura
     léxica), pero medidas contra ``section_query`` (no un claim de
     verificación) y leyendo ``candidate["score"]`` en vez del extractor
-    estricto de score nativo de Chroma de 07."""
+    estricto de score nativo de Chroma de 07.
+
+    ``min_absolute_lexical_overlap_terms`` -- escotilla de escape SOLO
+    para 06, deliberadamente NUNCA agregada a ``DEFAULT_GRADER_THRESHOLDS``/
+    ``validate_grader_thresholds`` (contrato compartido con Stage 07, exige
+    exactamente 5 claves -- tocarlo ahí cambiaría también el grader de 07).
+    Diagnóstico real (``experimento_paper_51``/``52``, dos temas distintos):
+    algunas secciones ("cajón de sastre" que agrupan sub-temas dispares en
+    ``key_arguments``/``evidence_needs``) generan un ``section_query``
+    inusualmente largo incluso para el estándar ya largo de 06 -- el
+    denominador de ``lexical_overlap_ratio`` crece más todavía, así que
+    NINGÚN umbral de RATIO fijo es alcanzable para ellas sin também
+    debilitar el umbral de las demás secciones (que sí funcionan bien con
+    la ratio ya calibrada). La causa NO es el tema ni el título de la
+    sección (nunca se hardcodea eso aquí) -- es puramente la longitud de su
+    query. La solución: además del chequeo de RATIO (sin tocarlo), se
+    acepta también un conteo ABSOLUTO de términos en común como vía
+    alterna -- un piso que NO escala con la longitud de la query, así que
+    una sección larga necesita, en términos absolutos, la misma cantidad
+    de términos compartidos que una corta, en vez de una cantidad creciente.
+    Solo hace el chequeo MÁS PERMISIVO que antes (nunca más estricto):
+    ``None`` (default) reproduce el comportamiento exacto previo a este
+    cambio -- ratio en solitario, sin escotilla."""
     if thresholds is None:
         thresholds = DEFAULT_GRADER_THRESHOLDS
     thresholds = validate_grader_thresholds(thresholds)
+    if min_absolute_lexical_overlap_terms is not None and (
+        isinstance(min_absolute_lexical_overlap_terms, bool)
+        or not isinstance(min_absolute_lexical_overlap_terms, int)
+        or min_absolute_lexical_overlap_terms < 0
+    ):
+        raise ValueError(
+            "min_absolute_lexical_overlap_terms debe ser None o un entero "
+            f">= 0, recibido {min_absolute_lexical_overlap_terms!r}."
+        )
 
     candidate_count = len(candidates)
     source_diversity = len({c.get("source_filename") for c in candidates})
@@ -169,9 +201,20 @@ def grade_section_evidence(
         candidate_terms: set[str] = set()
         for candidate in candidates:
             candidate_terms |= _extract_terms(str(candidate.get("text", "")))
-        lexical_overlap_ratio = len(query_terms & candidate_terms) / len(query_terms)
+        overlap_terms = query_terms & candidate_terms
+        lexical_overlap_ratio = len(overlap_terms) / len(query_terms)
     else:
+        overlap_terms = set()
         lexical_overlap_ratio = 0.0
+    lexical_overlap_term_count = len(overlap_terms)
+
+    low_coverage = lexical_overlap_ratio < thresholds["min_lexical_overlap_ratio"]
+    if (
+        low_coverage
+        and min_absolute_lexical_overlap_terms is not None
+        and lexical_overlap_term_count >= min_absolute_lexical_overlap_terms
+    ):
+        low_coverage = False
 
     reason_codes: list[str] = []
     if candidate_count < thresholds["min_candidate_count"]:
@@ -183,7 +226,7 @@ def grade_section_evidence(
         reason_codes.append("LOW_SOURCE_DIVERSITY")
     if max_relevance_score < thresholds["min_relevance_score"]:
         reason_codes.append("LOW_RELEVANCE")
-    if lexical_overlap_ratio < thresholds["min_lexical_overlap_ratio"]:
+    if low_coverage:
         reason_codes.append("LOW_COVERAGE")
 
     grade_result = "INSUFFICIENT" if reason_codes else "SUFFICIENT"
@@ -198,6 +241,7 @@ def grade_section_evidence(
         "source_diversity": source_diversity,
         "max_relevance_score": max_relevance_score,
         "lexical_overlap_ratio": lexical_overlap_ratio,
+        "lexical_overlap_term_count": lexical_overlap_term_count,
     }
 
 
@@ -303,6 +347,7 @@ def retrieve_section_evidence_adaptive(
     max_additional_retrieval_rounds: int = DEFAULT_MAX_ADDITIONAL_RETRIEVAL_ROUNDS,
     grader_thresholds: dict | None = None,
     minimum_viable_thresholds: dict | None = None,
+    min_absolute_lexical_overlap_terms: int | None = None,
 ) -> dict[str, Any]:
     """Ciclo adaptativo RETRIEVE -> GRADE -> (REWRITE_QUERY | ADJUST_TOP_K)
     para una sección de 06, análogo al controller de 07
@@ -351,7 +396,10 @@ def retrieve_section_evidence_adaptive(
         query_override=query,
     )
     grade = grade_section_evidence(
-        section_query=query, candidates=evidence, thresholds=grader_thresholds
+        section_query=query,
+        candidates=evidence,
+        thresholds=grader_thresholds,
+        min_absolute_lexical_overlap_terms=min_absolute_lexical_overlap_terms,
     )
 
     while grade["grade_result"] == "INSUFFICIENT" and rounds_used < max_additional_retrieval_rounds:
@@ -384,7 +432,10 @@ def retrieve_section_evidence_adaptive(
             query_override=query,
         )
         grade = grade_section_evidence(
-            section_query=query, candidates=evidence, thresholds=grader_thresholds
+            section_query=query,
+            candidates=evidence,
+            thresholds=grader_thresholds,
+            min_absolute_lexical_overlap_terms=min_absolute_lexical_overlap_terms,
         )
 
     minimum_viable_when_insufficient = None
