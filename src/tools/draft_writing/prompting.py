@@ -433,6 +433,41 @@ def build_llm_synthesized_organizational_section(section, text):
     }
 
 
+_EVIDENCE_CITATION_BRACKET_RE = re.compile(r"\[\s*\d+(?:\s*[\-–,]\s*\d+)*\s*\]")
+
+
+def _mask_source_citation_brackets(text):
+    """Enmascara marcadores de cita bibliográfica del PAPER ORIGINAL dentro
+    del texto de evidencia (ej. "[9]", "[2-5]", "[7,8]", "[38,39]") antes de
+    mostrárselo al LLM en EVIDENCIA_DISPONIBLE dentro de
+    ``build_section_prompt_v2``.
+
+    Diagnóstico real (experimento_paper_52, sección S5): una evidencia (E8)
+    contenía literalmente "[9]" (una cita bibliográfica del paper original,
+    ej. "Orjuela-Cañón et al. [9] compare..."), y el LLM confundió ese "[9]"
+    con el handle propio del sistema "E9", produciendo
+    ``INVALID_EVIDENCE_ID`` de forma reproducible en los 3 intentos de
+    regeneración (temperature=0.0 => mismo prompt, misma evidencia, mismo
+    error cada vez). El prompt ya advertía de esto en texto (regla 3 de
+    ``build_section_prompt_v2``), pero no bastaba; enmascarar visualmente el
+    patrón antes de que el LLM lo vea es una defensa estructural adicional,
+    no un reemplazo de esa regla.
+
+    El patrón es SOLO-NUMÉRICO (dígitos, guiones/comas, opcionalmente con
+    espacios) por lo que NUNCA coincide con el propio formato de handle de
+    fuente del sistema, que siempre lleva un pipe y texto
+    (``[archivo.pdf | chunk_xxxx]``), ni con listas de números decimales
+    como "[0.95, 0.99]" (el separador "." rompe el patrón por diseño: esos
+    corchetes casi siempre son datos/resultados citados, nunca una lista de
+    referencias bibliográficas).
+
+    Esta función SOLO transforma el texto que se muestra en ESTE prompt --
+    nunca muta ``evidence`` en sí, así que ``draft_rag_evidence.csv`` y
+    demás artefactos de trazabilidad conservan el texto original de las
+    fuentes sin tocar."""
+    return _EVIDENCE_CITATION_BRACKET_RE.sub("(cita del texto original)", str(text or ""))
+
+
 def build_section_prompt_v2(section, evidence, quantitative_context, previous_errors, policy):
     """Prompt del contrato canonical_sentences_v2 (Fase 3, evidence
     handles) -- SEPARADO por completo de ``build_section_prompt``
@@ -461,11 +496,32 @@ def build_section_prompt_v2(section, evidence, quantitative_context, previous_er
     ``identity_action``/``parent_claim_uids`` en ningún elemento de
     ``sentences[]`` -- el sistema los asigna/resuelve después
     (``validate_and_parse_sentences_v2`` rechaza explícitamente
-    cualquiera de estos si el LLM los envía)."""
+    cualquiera de estos si el LLM los envía).
+
+    Enmascarado de citas del paper original: el ``text`` de cada
+    evidencia se pasa por ``_mask_source_citation_brackets`` antes de
+    mostrarse -- diagnóstico real (``experimento_paper_52``, sección S5):
+    una evidencia (E8) contenía literalmente "[9]" (una cita bibliográfica
+    del paper original, ej. "Orjuela-Cañón et al. [9] compare..."), y el
+    LLM la confundió con el handle "E9" del sistema, alucinando
+    ``INVALID_EVIDENCE_ID`` de forma reproducible en los 3 intentos de
+    regeneración (``temperature=0.0`` -- mismo prompt, misma evidencia,
+    mismo error cada vez, así que reintentar a ciegas nunca lo iba a
+    resolver). La regla 3 ya advertía de esto en texto, pero no bastaba;
+    enmascarar el patrón visualmente ANTES de que el LLM lo vea es una
+    defensa adicional, no un reemplazo de esa regla. Solo afecta lo que
+    el LLM VE en este prompt -- nunca muta ``evidence`` en sí, así que
+    ``draft_rag_evidence.csv`` y demás artefactos conservan el texto
+    original de las fuentes sin tocar."""
 
     section_id = safe_str(section.get("section_id"))
     evidence_handles = [
-        {"handle": f"E{i + 1}", "source_filename": row["source_filename"], "chunk_id": row["chunk_id"], "text": row.get("text", "")}
+        {
+            "handle": f"E{i + 1}",
+            "source_filename": row["source_filename"],
+            "chunk_id": row["chunk_id"],
+            "text": _mask_source_citation_brackets(row.get("text", "")),
+        }
         for i, row in enumerate(evidence)
     ]
     budgets = policy.get("section_budgets") or assign_section_budgets(
