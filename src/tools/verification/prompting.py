@@ -58,6 +58,11 @@ def build_verification_messages(
         "La falta de evidencia no equivale a falsedad. Distingue desacuerdo entre papers "
         "de conflicto claim-evidence. Usa solo evidence_id entregados. No reescribas el claim. "
         "Devuelve únicamente un objeto JSON sin Markdown y conserva el idioma del claim en rationale. "
+        "El objeto JSON debe incluir SIEMPRE los 16 campos exactos listados en response_schema, sin "
+        "excepción -- incluso cuando el valor correcto sea false, una lista vacía [] o 'NONE'/'NOT_APPLICABLE'. "
+        "Un campo booleano en false o una lista vacía siguen siendo obligatorios: nunca omitas un campo del "
+        "JSON de salida por considerar que su valor es el default, no aplica, o ya está implícito en otro "
+        "campo. Un JSON con menos de 16 campos es inválido aunque el contenido sea correcto. "
         "Criterio explícito para llm_correction_recommendation (no lo dejes en False por defecto sin "
         "evaluarlo): marcá true cuando el veredicto sea PARTIALLY_SUPPORTED o CONTRADICTED y el ajuste "
         "necesario sea LOCALIZADO -- es decir, se pueda resolver acotando, matizando o corrigiendo una "
@@ -79,23 +84,32 @@ def build_verification_messages(
             "authorized_for_section": bool(row.get("authorized_for_section", False)),
             "usage_allowed": row.get("usage_allowed", "SUPPORT"),
         })
+    # NOTA: los campos booleanos y de lista se describen con texto (no con un valor
+    # literal False/[] como "ejemplo") porque un valor literal ya-válido en el schema
+    # se demostró ambiguo para el LLM: en corridas reales, el modelo interpretaba
+    # "additional_retrieval_needed": False (y, en menor medida, "contradiction_evidence_ids": []
+    # y "reason_codes": []) como un default ya satisfecho y omitía el campo por completo del
+    # JSON de salida -- causando LLM_RESPONSE_FIELDS_MISSING y, tras agotar los reintentos,
+    # technical_status=LLM_VALIDATION_ATTEMPTS_EXHAUSTED (NOT_EVALUATED) sin que hubiera ningún
+    # problema real de evidencia ni de retrieval. Describir el campo como instrucción textual
+    # obligatoria (en vez de como valor ya completado) evita que el LLM lo trate como opcional.
     schema = {
         "claim_id": context["claim_id"],
         "verdict": f"one of {tuple(allowed_verdicts)}",
         "support_level": f"one of {SUPPORT_LEVELS}",
-        "evidence_ids_used": [],
-        "evidence_ids_rejected": [],
+        "evidence_ids_used": "REQUIRED list of strings (usar [] si no hay evidencia usada; el campo debe estar presente siempre)",
+        "evidence_ids_rejected": "REQUIRED list of strings (usar [] si no se rechazó evidencia; el campo debe estar presente siempre)",
         "rationale": "string",
         "contradiction_type": f"one of {CONTRADICTION_TYPES}",
-        "contradiction_evidence_ids": [],
+        "contradiction_evidence_ids": "REQUIRED list of strings (usar [] si no aplica; el campo debe estar presente siempre)",
         "numeric_assessment": f"one of {NUMERIC_ASSESSMENTS}",
         "attribution_assessment": f"one of {ATTRIBUTION_ASSESSMENTS}",
         "extrapolation_assessment": f"one of {EXTRAPOLATION_ASSESSMENTS}",
         "confidence": "LOW|MEDIUM|HIGH",
-        "additional_retrieval_needed": False,
-        "llm_correction_recommendation": False,
-        "manual_review_required": False,
-        "reason_codes": [],
+        "additional_retrieval_needed": "REQUIRED boolean true|false -- incluí explícitamente el campo con el valor false cuando no se necesite retrieval adicional; nunca lo omitas",
+        "llm_correction_recommendation": "REQUIRED boolean true|false -- incluí explícitamente el campo con el valor false cuando no aplique; nunca lo omitas",
+        "manual_review_required": "REQUIRED boolean true|false -- incluí explícitamente el campo con el valor false cuando no aplique; nunca lo omitas",
+        "reason_codes": "REQUIRED list of strings (usar [] si no aplica; el campo debe estar presente siempre)",
     }
     user_payload = {
         "prompt_version": policy["verification_user_prompt_version"],
