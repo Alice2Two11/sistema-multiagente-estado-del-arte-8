@@ -42,6 +42,10 @@ from src.tools.draft_writing.prompting import (
     build_source_free_organizational_section,
     build_dynamic_split_example_prompt,
     validate_dynamic_split_example,
+    build_organizational_synthesis_prompt,
+    extract_plain_text_response,
+    validate_organizational_synthesis,
+    build_llm_synthesized_organizational_section,
 )
 from src.tools.draft_writing.retrieval import (
     build_section_query,
@@ -281,6 +285,32 @@ class DraftWritingAgent:
         distinto al retrieval estático -- se escribe siempre (también
         cuando está deshabilitado, con ``adaptive_retrieval_enabled=False``
         y el resto en ``None``) en ``draft_adaptive_retrieval_trace.csv``."""
+        # Secciones organizativas source-free (introducción/conclusión/
+        # gaps/discusión) nunca deben competir por el mismo pool de
+        # evidencia ni con el mismo umbral que las secciones con
+        # evidencia real -- diagnóstico real (experimento_paper_51):
+        # esas secciones terminaban agotando las rondas de retrieval
+        # adaptativo (LOW_COVERAGE) sin ninguna esperanza real de pasar,
+        # porque nunca debieron competir por evidencia en primer lugar.
+        # Se cortocircuita ANTES de tocar Chroma/el grader -- ahorra
+        # rondas de retrieval y llamadas al LLM del planner adaptativo, y
+        # su síntesis real ahora la produce
+        # DraftWritingAgent._build_organizational_section a partir del
+        # propio contenido del documento, no de papers recuperados.
+        if section_allows_no_sources(section):
+            telemetry = {
+                "adaptive_retrieval_enabled": bool(
+                    policy.get("adaptive_retrieval_enabled", False)
+                ),
+                "additional_retrieval_rounds_used": 0,
+                "final_query": None,
+                "final_grade_result": "SKIPPED_SOURCE_FREE_ORGANIZATIONAL_SECTION",
+                "final_grade_reason_codes": None,
+                "minimum_viable_when_insufficient": None,
+                "min_lexical_overlap_ratio_used": None,
+            }
+            return [], telemetry
+
         chunks = bundle["chunks"]
 
         # Define los límites de evidencia que se recuperarán para la sección
@@ -349,7 +379,66 @@ class DraftWritingAgent:
         }
         return evidence, telemetry
 
-    # devuelve el resultado oficial del agente indicando que esa sección falló la validación, 
+    # Sintetiza una sección organizativa (introducción/conclusión/gaps/
+    # discusión) a partir del CONTENIDO PROPIO del estado del arte -- de
+    # las demás secciones ya redactadas cuando existen (permite una
+    # síntesis genuina, sobre todo en conclusión), o de la planificación
+    # del esquema (título/propósito/argumentos clave/evidencia buscada,
+    # vía build_section_query) cuando todavía no existen (típicamente la
+    # introducción, procesada antes que el resto) -- en vez del mismo
+    # texto genérico fijo en toda corrida
+    # (build_source_free_organizational_section). Fail-safe en cada paso:
+    # cualquier fallo (LLM, forma inesperada de la respuesta, validación
+    # determinística) hace que esta función caiga exactamente al template
+    # estático histórico -- nunca deja una sección sin draft_text.
+    def _build_organizational_section(
+        self,
+        section: Mapping[str, Any],
+        all_sections: Sequence[Mapping[str, Any]],
+        generated_by_id: Mapping[str, Mapping[str, Any]],
+        policy: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Devuelve ``(sección_generada, se_hizo_llamada_llm)``."""
+        sid = str(section.get("section_id", "")).strip()
+        output_language = policy.get("output_language", "español")
+        fallback = lambda: build_source_free_organizational_section(section, output_language)
+
+        context_sections: list[dict[str, Any]] = []
+        for other in all_sections:
+            other_sid = str(other.get("section_id", "")).strip()
+            if not other_sid or other_sid == sid:
+                continue
+            already_generated = generated_by_id.get(other_sid)
+            if already_generated and already_generated.get("draft_text"):
+                context_sections.append(
+                    {
+                        "section_title": other.get("section_title"),
+                        "text": already_generated["draft_text"],
+                    }
+                )
+            else:
+                context_sections.append(
+                    {
+                        "section_title": other.get("section_title"),
+                        "text": build_section_query(other),
+                    }
+                )
+
+        try:
+            prompt = build_organizational_synthesis_prompt(
+                section, context_sections, output_language
+            )
+            raw = self.runtime.invoke(prompt)
+            text = extract_plain_text_response(raw)
+        except Exception:
+            return fallback(), True
+
+        if not validate_organizational_synthesis(text):
+            return fallback(), True
+
+        return build_llm_synthesized_organizational_section(section, text), True
+
+    # devuelve el resultado oficial del agente indicando que esa sección falló la validación,
     # junto con toda la información necesaria para saber qué pasó y por qué.
     @staticmethod
     def _build_v2_section_validation_failed_result(
@@ -569,6 +658,7 @@ class DraftWritingAgent:
                 )
 
             generated: list[dict[str, Any]] = []
+            generated_by_id: dict[str, dict[str, Any]] = {}
             all_evidence: list[dict[str, Any]] = []
             adaptive_retrieval_trace_rows: list[dict[str, Any]] = []
             attempt_logs: dict[str, list[dict[str, Any]]] = {}
@@ -618,17 +708,32 @@ class DraftWritingAgent:
                 if not evidence:
                     if not section_allows_no_sources(section):
                         raise ValueError(f"MISSING_SECTION_EVIDENCE:{sid}")
-                    generated_section = build_source_free_organizational_section(
-                        section, policy.get("output_language", "español")
+                    generated_section, organizational_llm_call_made = (
+                        self._build_organizational_section(
+                            section, sections, generated_by_id, policy
+                        )
+                    )
+                    if organizational_llm_call_made:
+                        llm_calls += 1
+                    is_llm_synthesized = (
+                        generated_section.get("deterministic_normalization", {}).get(
+                            "normalization_version"
+                        )
+                        == "v4_llm_synthesized_organizational_section"
                     )
                     attempt_logs[sid] = [
                         {
                             "attempt": 0,
-                            "mode": "deterministic_source_free_organizational_section",
+                            "mode": (
+                                "llm_synthesized_organizational_section"
+                                if is_llm_synthesized
+                                else "deterministic_source_free_organizational_section"
+                            ),
                             "validation": generated_section["section_validation"],
                         }
                     ]
                     generated.append(generated_section)
+                    generated_by_id[sid] = generated_section
                     continue
 
                 # Reutiliza la sección tal cual si esta ronda de revisión
@@ -654,6 +759,7 @@ class DraftWritingAgent:
                         }
                     ]
                     generated.append(reused_section)
+                    generated_by_id[sid] = reused_section
                     continue
 
                 if contract == CANONICAL_SENTENCES_DRAFT_REPRESENTATION_CONTRACT:
@@ -698,6 +804,7 @@ class DraftWritingAgent:
                         )
 
                     generated.append(generated_section)
+                    generated_by_id[sid] = generated_section
                     continue
 
             # Organiza la evidencia por sección y valida el borrador completo.

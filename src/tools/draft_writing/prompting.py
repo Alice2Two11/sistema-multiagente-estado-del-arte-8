@@ -193,6 +193,207 @@ def build_source_free_organizational_section(section, output_language="español"
     }
 
 
+# ------------------------------------------------------------------
+# Síntesis de secciones organizativas (introducción/conclusión/gaps/
+# discusión) a partir del CONTENIDO PROPIO del estado del arte -- en
+# vez del texto genérico fijo de build_source_free_organizational_section
+# (idéntico en toda corrida, sin relación con el tema real) y en vez de
+# someter estas secciones al mismo ciclo de recuperación adaptativa que
+# las secciones con evidencia real (que compite por el mismo pool de
+# papers con el mismo umbral de cobertura léxica -- diagnóstico real,
+# experimento_paper_51: introducción/conclusión con evidence=[] tras
+# agotar rondas, resultando siempre en el mismo texto fijo). Nunca
+# inventa hallazgos ni cita evidencia -- solo sintetiza, en prosa,
+# lo que ya está en las otras secciones del propio documento (ya
+# redactadas) o, si aún no existen (típico de la introducción, que se
+# procesa antes que el resto), en la propia planificación del esquema
+# (título/propósito/argumentos clave/evidencia buscada -- ver
+# build_section_query). Fail-safe en cada paso: cualquier fallo (LLM,
+# forma inesperada de la respuesta, validación determinística) hace que
+# el llamador (DraftWritingAgent._build_organizational_section) caiga
+# al template estático histórico -- nunca deja una sección sin texto.
+# ------------------------------------------------------------------
+
+_ORGANIZATIONAL_FORBIDDEN_RE = re.compile(r"\d|\[[^\]]*\]")
+
+
+def _organizational_role(section):
+    """Clasificación puramente textual (no normativa -- solo decide QUÉ
+    instrucción de rol usar en el prompt de síntesis, nunca si la
+    sección es o no source-free, eso lo sigue decidiendo exclusivamente
+    section_source_requirement.py)."""
+    haystack = (
+        safe_str(section.get("section_type")) + " " + safe_str(section.get("section_title"))
+    ).casefold()
+    if any(token in haystack for token in ("conclu", "cierre", "closing")):
+        return "conclusion"
+    if any(token in haystack for token in ("introdu",)):
+        return "introduccion"
+    if any(token in haystack for token in ("gap", "vacio", "vací")):
+        return "gaps"
+    if any(token in haystack for token in ("discus",)):
+        return "discusion"
+    return "organizativa"
+
+
+_ORGANIZATIONAL_ROLE_INSTRUCTIONS = {
+    "introduccion": (
+        "Escribe una INTRODUCCIÓN real para este estado del arte: presenta "
+        "el problema general y por qué es relevante, y anticipa, en un par "
+        "de frases, los grandes bloques temáticos que cubrirán las secciones "
+        "listadas abajo (usa su contenido como guía temática, sin "
+        "enumerarlas una por una como una lista)."
+    ),
+    "conclusion": (
+        "Escribe una CONCLUSIÓN real para este estado del arte: sintetiza, "
+        "en tus propias palabras, los hallazgos y tensiones más importantes "
+        "que ya se desarrollaron en las secciones resumidas abajo, y cierra "
+        "señalando de forma general hacia dónde apunta el trabajo futuro del "
+        "área -- sin inventar ningún hallazgo, cifra o comparación que no "
+        "esté ya reflejada en esos resúmenes."
+    ),
+    "gaps": (
+        "Sintetiza, en tus propias palabras, los vacíos y limitaciones que "
+        "ya emergen de las secciones resumidas abajo -- sin inventar ningún "
+        "vacío que no esté reflejado en ellas."
+    ),
+    "discusion": (
+        "Sintetiza, en tus propias palabras, la discusión general que se "
+        "desprende de las secciones resumidas abajo -- sin inventar ningún "
+        "argumento que no esté reflejado en ellas."
+    ),
+    "organizativa": (
+        "Escribe un párrafo organizativo/de transición para esta sección, "
+        "coherente con el resto del documento resumido abajo."
+    ),
+}
+
+
+def build_organizational_synthesis_prompt(section, context_sections, output_language="español"):
+    """``context_sections`` es una lista de ``{"section_title", "text"}``
+    de las DEMÁS secciones del esquema: ``text`` es el ``draft_text`` real
+    si esa sección ya fue redactada (permite una síntesis genuina, sobre
+    todo en conclusión/discusión/gaps), o la descripción de planificación
+    del esquema (``build_section_query``) si todavía no existe (típico de
+    la introducción)."""
+    section_title = safe_str(section.get("section_title"))
+    role_instruction = _ORGANIZATIONAL_ROLE_INSTRUCTIONS[_organizational_role(section)]
+    context_block = "\n\n".join(
+        f"- {safe_str(ctx.get('section_title'))}: {safe_str(ctx.get('text'))[:600]}"
+        for ctx in context_sections
+        if safe_str(ctx.get("text")).strip()
+    ) or (
+        "(No hay otras secciones disponibles todavía; usa únicamente el "
+        "título de esta sección como guía temática.)"
+    )
+    return f"""
+Eres el agente redactor de un sistema multiagente para estados del arte
+científicos, escribiendo AHORA la sección organizativa "{section_title}".
+
+{role_instruction}
+
+REGLAS ESTRICTAS:
+1. NO uses ningún número, cifra, porcentaje ni valor cuantitativo.
+2. NO uses corchetes de cita (ej. "[archivo.pdf | chunk_0001]") ni ningún
+   identificador técnico -- esta sección NO tiene evidencia asignada y no
+   debe simular que la tiene.
+3. NO nombres ningún autor, dataset, algoritmo o herramienta específica
+   que no aparezca ya mencionada en el contexto de abajo.
+4. NO inventes ningún hallazgo, comparación o resultado nuevo -- solo
+   sintetiza, a nivel general, lo que ya está reflejado en el contexto.
+5. {language_instruction(output_language)}
+6. Devuelve ÚNICAMENTE el texto de la sección, en prosa continua (sin
+   títulos, sin listas, sin JSON, sin comillas envolventes).
+
+CONTEXTO (otras secciones del mismo estado del arte, ya redactadas o
+planeadas):
+{context_block}
+
+Extensión objetivo: 2 a 4 oraciones.
+""".strip()
+
+
+def extract_plain_text_response(raw):
+    """Extrae el texto plano de una respuesta cruda del LLM -- mismo
+    desempaquetado de ``content``/bloques de proveedor (Anthropic/OpenAI)
+    que ``DraftWritingRuntime.parse()``, pero SIN forzar un parseo JSON
+    (aquí se espera prosa libre, no ``{"section_id": ...}``). Nunca
+    lanza -- ante una forma inesperada cae a ``str(raw)``, dejando que
+    ``validate_organizational_synthesis`` decida si el resultado es
+    aceptable."""
+    content = getattr(raw, "content", raw)
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                block_text = block.get("text")
+                if isinstance(block_text, str):
+                    parts.append(block_text)
+            elif isinstance(block, str):
+                parts.append(block)
+        content = "\n".join(parts)
+    if not isinstance(content, str):
+        content = str(content)
+    return content.strip()
+
+
+def validate_organizational_synthesis(text):
+    """Guardia determinística (sin LLM), SIEMPRE aplicada antes de
+    aceptar un texto organizativo sintetizado por el LLM -- si falla, el
+    llamador cae al template estático fijo
+    (``build_source_free_organizational_section``), nunca deja pasar
+    texto sin revisar. Rechaza cualquier cifra o corchete de cita
+    (evidencia simulada, prohibida en una sección sin evidencia
+    asignada) y exige una longitud razonable (ni vacío ni desproporcionado)."""
+    if not isinstance(text, str):
+        return False
+    cleaned = text.strip()
+    if not cleaned:
+        return False
+    if _ORGANIZATIONAL_FORBIDDEN_RE.search(cleaned):
+        return False
+    word_count = len(cleaned.split())
+    if word_count < 15 or word_count > 220:
+        return False
+    return True
+
+
+def build_llm_synthesized_organizational_section(section, text):
+    """Misma forma de salida que ``build_source_free_organizational_
+    section`` (consumida idénticamente por build_draft_reports/
+    validate_draft_global -- ``source_free_organizational_section: True``
+    exime del chequeo de citas/densidad y de rango de palabras), pero con
+    el texto sintetizado a partir del propio documento en vez del template
+    fijo."""
+    return {
+        "section_id": safe_str(section.get("section_id")),
+        "section_title": safe_str(section.get("section_title")),
+        "draft_text": text.strip(),
+        "claims": [],
+        "generation_attempt": 0,
+        "section_validation": {
+            "validation_ok": True,
+            "errors": [],
+            "citation_errors": [],
+            "claim_errors": [],
+            "numeric_errors": [],
+            "valid_citation_count": 0,
+            "substantive_sentence_count": 0,
+            "source_free_organizational_section": True,
+        },
+        "deterministic_normalization": {
+            "applied": True,
+            "normalization_version": "v4_llm_synthesized_organizational_section",
+            "source_free_organizational_section": True,
+            "reason": (
+                "No evidence assigned by outline; section synthesized from "
+                "the state-of-the-art's own generated/planned content "
+                "instead of the fixed generic template."
+            ),
+        },
+    }
+
+
 def build_section_prompt_v2(section, evidence, quantitative_context, previous_errors, policy):
     """Prompt del contrato canonical_sentences_v2 (Fase 3, evidence
     handles) -- SEPARADO por completo de ``build_section_prompt``
