@@ -212,6 +212,27 @@ class ClaimTraceabilityRow:
     # dataclass que no los pase explícitamente.
     technical_status: str = "OK"
     technical_issue_codes: tuple[str, ...] = ()
+    # Diagnóstico real (experimento_paper_52, segunda vuelta): con
+    # technical_status/technical_issue_codes ya visibles, los 10 claims
+    # NOT_EVALUATED de esa corrida resultaron TODOS
+    # "LLM_VALIDATION_ATTEMPTS_EXHAUSTED" -- es decir, el LLM verificador
+    # nunca produjo una respuesta que pasara
+    # validate_llm_verification_response (format/schema), agotando los
+    # reintentos, para claims de tipos y cantidades de evidencia
+    # dispares (QUANTITATIVE, COMPARATIVE, SUBSTANTIVE_FACTUAL,
+    # METHODOLOGICAL; 1 a 3 citas) -- sin un patrón obvio visible desde
+    # fuera. La causa raíz real está en CUÁL regla de
+    # validate_llm_verification_response se violó en cada intento
+    # (ValueError con códigos cortos y seguros, ej.
+    # "UNKNOWN_EVIDENCE_ID:E5", "SUPPORTED_REQUIRES_STRONG_SUPPORT" --
+    # nunca texto crudo del LLM), y eso solo vivía en
+    # ClaimVerificationResult.raw_attempts[].validation_errors, que
+    # nunca salía de Agent07 (traceability.py ya solo conservaba un
+    # conteo + fingerprint de raw_attempts, nunca los códigos). Este
+    # campo es la UNIÓN (deduplicada, ordenada) de esos códigos de error
+    # across TODOS los intentos de un claim -- nunca el texto crudo de
+    # la respuesta del LLM, nunca el prompt.
+    llm_validation_error_codes: tuple[str, ...] = ()
     def to_dict(self) -> dict[str, Any]: return asdict(self)
 
 

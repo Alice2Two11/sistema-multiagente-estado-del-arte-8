@@ -280,6 +280,16 @@ def build_agent08_input_from_committed_agent07(
             "technical_issue_codes": "|".join(
                 sorted(str(item).strip() for item in (row.get("technical_issue_codes") or ()) if str(item).strip())
             ),
+            # Diagnóstico real (experimento_paper_52, segunda vuelta): los
+            # 10 NOT_EVALUATED de esa corrida fueron todos
+            # LLM_VALIDATION_ATTEMPTS_EXHAUSTED -- technical_status por sí
+            # solo no dice CUÁL regla de schema/formato violó el LLM en
+            # cada intento. Espejo 1:1 de
+            # ClaimTraceabilityRow.llm_validation_error_codes -- códigos
+            # cortos y seguros (nunca texto crudo del LLM).
+            "llm_validation_error_codes": "|".join(
+                sorted(str(item).strip() for item in (row.get("llm_validation_error_codes") or ()) if str(item).strip())
+            ),
         }
         claim_evidence = evidence_by_claim.get(claim_id, ())
         if claim_evidence:

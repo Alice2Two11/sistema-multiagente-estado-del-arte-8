@@ -114,6 +114,7 @@ CLAIM_AUDIT_COLUMNS = [
     # deriva/infiere aquí.
     "technical_status",
     "technical_issue_codes",
+    "llm_validation_error_codes",
 ]
 
 CITATION_CHECK_COLUMNS = [
@@ -223,6 +224,11 @@ def build_claim_audit_rows(
             if "technical_issue_codes" in all_columns
             else ""
         )
+        llm_validation_error_codes = (
+            first_non_empty(row.get("llm_validation_error_codes") for row in group)
+            if "llm_validation_error_codes" in all_columns
+            else ""
+        )
 
         correction_needed = False
         if "correction_needed" in all_columns:
@@ -263,6 +269,7 @@ def build_claim_audit_rows(
                 ),
                 "technical_status": technical_status,
                 "technical_issue_codes": technical_issue_codes,
+                "llm_validation_error_codes": llm_validation_error_codes,
             }
         )
 
