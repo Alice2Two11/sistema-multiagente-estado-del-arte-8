@@ -197,6 +197,21 @@ class ClaimTraceabilityRow:
     # Identidad estable (ver src/tools/draft_writing/claim_identity.py) --
     # "" para claims legacy sin identidad estable todavía.
     claim_uid: str = ""
+    # Diagnóstico real (experimento_paper_52, Stage08): 11/37 claims
+    # terminaron en NOT_EVALUATED con evidence_pair_count=0 en el reporte
+    # final, y hasta ahora era imposible distinguir, sin volcar el JSON
+    # crudo de Agent07, si la causa era falta de evidencia, un corte
+    # deliberado (deterministic_precheck) o un bloqueo técnico (LLM no
+    # disponible, recuperación adicional agotada/no disponible, etc.).
+    # ClaimVerificationResult.technical_status/technical_issue_codes ya
+    # traían esta respuesta -- solo nunca se propagaban hasta esta fila,
+    # que es lo único que sobrevive hasta el CSV final de Stage08. Ambos
+    # campos son un espejo 1:1 de esos dos campos de
+    # ClaimVerificationResult (nunca se derivan/infieren aquí), y llevan
+    # default para no romper ninguna otra construcción histórica de esta
+    # dataclass que no los pase explícitamente.
+    technical_status: str = "OK"
+    technical_issue_codes: tuple[str, ...] = ()
     def to_dict(self) -> dict[str, Any]: return asdict(self)
 
 

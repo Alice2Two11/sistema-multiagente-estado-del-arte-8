@@ -105,6 +105,15 @@ CLAIM_AUDIT_COLUMNS = [
     "evidence_present",
     "invalid_evidence_pair_count",
     "invalid_evidence_pairs",
+    # Diagnóstico real (experimento_paper_52): antes de esto, un
+    # NOT_EVALUATED con evidence_pair_count=0 en este mismo CSV era
+    # indistinguible entre "sin evidencia real", "corte determinista" o
+    # "bloqueo técnico" (LLM no disponible, recuperación adicional
+    # agotada/no disponible, etc.) sin volcar el JSON crudo de Agent07.
+    # Espejo 1:1 de lo que ya trae ClaimVerificationResult -- nunca se
+    # deriva/infiere aquí.
+    "technical_status",
+    "technical_issue_codes",
 ]
 
 CITATION_CHECK_COLUMNS = [
@@ -204,6 +213,16 @@ def build_claim_audit_rows(
             if "hallucination_risk" in all_columns
             else ""
         )
+        technical_status = (
+            first_non_empty(row.get("technical_status") for row in group)
+            if "technical_status" in all_columns
+            else ""
+        )
+        technical_issue_codes = (
+            first_non_empty(row.get("technical_issue_codes") for row in group)
+            if "technical_issue_codes" in all_columns
+            else ""
+        )
 
         correction_needed = False
         if "correction_needed" in all_columns:
@@ -242,6 +261,8 @@ def build_claim_audit_rows(
                 "invalid_evidence_pairs": json.dumps(
                     invalid_evidence_pairs, ensure_ascii=False
                 ),
+                "technical_status": technical_status,
+                "technical_issue_codes": technical_issue_codes,
             }
         )
 

@@ -267,6 +267,19 @@ def build_agent08_input_from_committed_agent07(
             "correction_needed": False,
             "correction_applied": False,
             "source_stage": SOURCE_STAGE_AGENT07,
+            # Diagnóstico real (experimento_paper_52): sin esto, un
+            # NOT_EVALUATED con evidence_pair_count=0 en el CSV final de
+            # Stage08 es indistinguible entre "sin evidencia real",
+            # "corte determinista" (deterministic_precheck) o "bloqueo
+            # técnico" (LLM no disponible, recuperación adicional agotada
+            # o no disponible, etc.) sin volcar el JSON crudo de Agent07.
+            # Espejo 1:1 de ClaimTraceabilityRow.technical_status/
+            # technical_issue_codes (ver src/tools/verification/
+            # traceability.py) -- nunca se deriva/infiere aquí.
+            "technical_status": str(row.get("technical_status") or "OK").strip(),
+            "technical_issue_codes": "|".join(
+                sorted(str(item).strip() for item in (row.get("technical_issue_codes") or ()) if str(item).strip())
+            ),
         }
         claim_evidence = evidence_by_claim.get(claim_id, ())
         if claim_evidence:
