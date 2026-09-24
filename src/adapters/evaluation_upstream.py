@@ -290,6 +290,17 @@ def build_agent08_input_from_committed_agent07(
             "llm_validation_error_codes": "|".join(
                 sorted(str(item).strip() for item in (row.get("llm_validation_error_codes") or ()) if str(item).strip())
             ),
+            # Diagnóstico agregado junto con el criterio CAUSAL_CLAUSE_REASONABLE_INFERENCE
+            # (verification_policy_config.SEMANTIC_REASON_CODES): "reason_codes" en
+            # este mismo dict (más abajo, vía claim_citation_audit) es un código
+            # DERIVADO (deterministic+semantic_issue_codes), nunca el reason_codes
+            # crudo que el LLM devuelve. Sin este campo, un reason_code que el LLM
+            # SÍ eligió explícitamente (como CAUSAL_CLAUSE_REASONABLE_INFERENCE)
+            # sería invisible para auditar. Espejo 1:1 de
+            # ClaimTraceabilityRow.llm_reason_codes.
+            "llm_reason_codes": "|".join(
+                sorted(str(item).strip() for item in (row.get("llm_reason_codes") or ()) if str(item).strip())
+            ),
         }
         claim_evidence = evidence_by_claim.get(claim_id, ())
         if claim_evidence:

@@ -233,6 +233,21 @@ class ClaimTraceabilityRow:
     # across TODOS los intentos de un claim -- nunca el texto crudo de
     # la respuesta del LLM, nunca el prompt.
     llm_validation_error_codes: tuple[str, ...] = ()
+    # Diagnóstico agregado junto con el criterio CAUSAL_CLAUSE_REASONABLE_INFERENCE
+    # (verification_policy_config.SEMANTIC_REASON_CODES / prompting.py): el campo
+    # ``source_issue_codes`` de esta misma fila NO transporta el ``reason_codes``
+    # crudo que el LLM devuelve por claim -- se construye como
+    # ``deterministic_issue_codes + semantic_issue_codes`` (ver
+    # build_provisional_traceability_rows), que son códigos DERIVADOS del
+    # veredicto/contradicción/numérico/atribución/extrapolación, nunca el
+    # ``reason_codes`` original. Sin este campo, un reason_code que el LLM SÍ
+    # devuelve explícitamente -- como CAUSAL_CLAUSE_REASONABLE_INFERENCE, usado
+    # para dejar constancia de que aplicó el criterio más laxo a una cláusula
+    # causal/de propósito de un claim compuesto -- quedaría invisible en el CSV
+    # final, haciendo imposible auditar cuántas veces se usó y sobre qué claims.
+    # Espejo 1:1 de ClaimVerificationResult.reason_codes (el campo crudo
+    # validado, nunca derivado ni filtrado aquí).
+    llm_reason_codes: tuple[str, ...] = ()
     def to_dict(self) -> dict[str, Any]: return asdict(self)
 
 

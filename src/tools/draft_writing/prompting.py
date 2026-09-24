@@ -577,6 +577,14 @@ REGLAS:
     "pero" uniendo dos ideas verificables por separado debe dividirse
     -- sin excepción, incluso si la evidencia disponible respalda
     ambas partes.
+    El mismo criterio aplica a conectores causales o de propósito como
+    "para", "lo que", "ya que", "debido a", "con el fin de": si la
+    cláusula que introducen agrega una idea verificable por separado
+    (un efecto, un resultado, una consecuencia medible) y no solo
+    completa gramaticalmente el sujeto de la oración (ej. "una técnica
+    para clasificación" no se divide -- ahí "para" no introduce una
+    afirmación nueva), divide también en dos oraciones independientes,
+    cada una con su propio respaldo de evidencia.
 12. "text" contiene ÚNICAMENTE el texto de la oración -- SIN ningún
     identificador técnico ni número de evidencia dentro. Nunca escribas
     "source_filename", "chunk_id", corchetes de cita, ni el propio

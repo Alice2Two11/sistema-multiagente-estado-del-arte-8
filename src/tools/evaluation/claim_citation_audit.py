@@ -115,6 +115,12 @@ CLAIM_AUDIT_COLUMNS = [
     "technical_status",
     "technical_issue_codes",
     "llm_validation_error_codes",
+    # Diagnóstico agregado junto con el criterio CAUSAL_CLAUSE_REASONABLE_INFERENCE:
+    # espejo 1:1 del reason_codes CRUDO del LLM (distinto del "reason_codes"
+    # derivado -- deterministic+semantic_issue_codes -- que ya expone este mismo
+    # audit). Permite auditar cuántas veces y sobre qué claims se aplicó el
+    # criterio más laxo para cláusulas causales/de propósito.
+    "llm_reason_codes",
 ]
 
 CITATION_CHECK_COLUMNS = [
@@ -229,6 +235,11 @@ def build_claim_audit_rows(
             if "llm_validation_error_codes" in all_columns
             else ""
         )
+        llm_reason_codes = (
+            first_non_empty(row.get("llm_reason_codes") for row in group)
+            if "llm_reason_codes" in all_columns
+            else ""
+        )
 
         correction_needed = False
         if "correction_needed" in all_columns:
@@ -270,6 +281,7 @@ def build_claim_audit_rows(
                 "technical_status": technical_status,
                 "technical_issue_codes": technical_issue_codes,
                 "llm_validation_error_codes": llm_validation_error_codes,
+                "llm_reason_codes": llm_reason_codes,
             }
         )
 

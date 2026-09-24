@@ -2600,6 +2600,15 @@ def validate_claim_traceability_row_contract(value: Mapping[str, Any]) -> dict[s
     if type(r["llm_validation_error_codes"]) not in (list,tuple): raise ValueError(f"{code}:llm_validation_error_codes:SEQUENCE_REQUIRED")
     r["llm_validation_error_codes"]=tuple(r["llm_validation_error_codes"])
     if any(not isinstance(item,str) or not item.strip() for item in r["llm_validation_error_codes"]): raise ValueError(f"{code}:llm_validation_error_codes:NONEMPTY_STRINGS_REQUIRED")
+    # llm_reason_codes: espejo 1:1 del reason_codes CRUDO validado que el LLM
+    # devuelve por claim (ver ClaimTraceabilityRow.llm_reason_codes) -- distinto
+    # de source_issue_codes (deterministic+semantic derivados). Vocabulario
+    # cerrado en origen (SEMANTIC_REASON_CODES | ADDITIONAL_RETRIEVAL_REASON_CODES,
+    # ya filtrado por validate_llm_verification_response antes de llegar acá), así
+    # que aquí solo se valida forma, igual que llm_validation_error_codes.
+    if type(r["llm_reason_codes"]) not in (list,tuple): raise ValueError(f"{code}:llm_reason_codes:SEQUENCE_REQUIRED")
+    r["llm_reason_codes"]=tuple(r["llm_reason_codes"])
+    if any(not isinstance(item,str) or not item.strip() for item in r["llm_reason_codes"]): raise ValueError(f"{code}:llm_reason_codes:NONEMPTY_STRINGS_REQUIRED")
     confidence=r["source_verification_confidence"]
     status=r["source_confidence_status"]
     if status not in ("AVAILABLE","NOT_AVAILABLE_IN_SOURCE_CONTRACT"):
@@ -2751,7 +2760,7 @@ def build_provisional_traceability_rows(referential_result:Any):
             for err in (attempt.get("validation_errors") or ())
             if str(err).strip()
         }))
-        row=ClaimTraceabilityRow(vr["claim_id"],rec["section_id"],vr["claim_type"],original,vr["scientific_verdict"],source,vr["hallucination_risk"],bool(vr["llm_correction_recommendation"]),bool(cids),cids,decisions,acc,rej,deferred,tuple(sorted(remaining)),manual_review,False,source_verification_confidence=vr.get("confidence"),source_confidence_status="AVAILABLE" if vr.get("confidence") is not None else "NOT_AVAILABLE_IN_SOURCE_CONTRACT",claim_uid=vr.get("claim_uid") or "",technical_status=vr.get("technical_status") or "OK",technical_issue_codes=tuple(vr.get("technical_issue_codes",()) or ()),llm_validation_error_codes=llm_validation_error_codes)
+        row=ClaimTraceabilityRow(vr["claim_id"],rec["section_id"],vr["claim_type"],original,vr["scientific_verdict"],source,vr["hallucination_risk"],bool(vr["llm_correction_recommendation"]),bool(cids),cids,decisions,acc,rej,deferred,tuple(sorted(remaining)),manual_review,False,source_verification_confidence=vr.get("confidence"),source_confidence_status="AVAILABLE" if vr.get("confidence") is not None else "NOT_AVAILABLE_IN_SOURCE_CONTRACT",claim_uid=vr.get("claim_uid") or "",technical_status=vr.get("technical_status") or "OK",technical_issue_codes=tuple(vr.get("technical_issue_codes",()) or ()),llm_validation_error_codes=llm_validation_error_codes,llm_reason_codes=tuple(vr.get("reason_codes",()) or ()))
         claim_rows.append(validate_claim_traceability_row_contract(row.to_dict()))
         eligible={e["evidence_id"]:e for e in vr.get("eligible_evidence",())};used={e["evidence_id"] for e in vr.get("evidence_used",())};rejected={e["evidence_id"] for e in vr.get("evidence_rejected",())}
         for eid in sorted(used|rejected):

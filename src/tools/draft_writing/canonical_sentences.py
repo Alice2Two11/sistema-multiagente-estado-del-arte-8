@@ -44,6 +44,7 @@ from .normalization import (
     is_substantive_sentence,
     split_sentences_preserving_citations,
 )
+from .prompting import RULE_11_CONNECTORS
 from .claim_identity import (
     ClaimIdentityDeclaration,
     default_mint_claim_uid,
@@ -59,6 +60,7 @@ from .validation import compute_unsupported_numeric_values
 INVALID_SENTENCES_STRUCTURE = "INVALID_SENTENCES_STRUCTURE"
 EMPTY_SENTENCE_ITEM = "EMPTY_SENTENCE_ITEM"
 SENTENCE_ITEM_CONTAINS_MULTIPLE_SENTENCES = "SENTENCE_ITEM_CONTAINS_MULTIPLE_SENTENCES"
+SENTENCE_ITEM_CONTAINS_COMPOUND_CONNECTOR = "SENTENCE_ITEM_CONTAINS_COMPOUND_CONNECTOR"
 MISSING_CITATIONS_FOR_SUBSTANTIVE_SENTENCE = "MISSING_CITATIONS_FOR_SUBSTANTIVE_SENTENCE"
 INVALID_CITATION = "INVALID_CITATION"
 INLINE_CITATION_NOT_ALLOWED = "INLINE_CITATION_NOT_ALLOWED"
@@ -156,6 +158,42 @@ def validate_sentence_atomicity(text: str) -> str | None:
         return EMPTY_SENTENCE_ITEM
     if len(segments) > 1:
         return SENTENCE_ITEM_CONTAINS_MULTIPLE_SENTENCES
+    return None
+
+
+# V2A02b -- refuerzo mecánico de la regla 11 del prompt (ver
+# build_section_prompt_v2, prompting.py: RULE_11_CONNECTORS). Diagnóstico
+# real (experimento_paper_53, dominio de detección de intrusiones): 22/42
+# claims activos quedaron PARTIALLY_SUPPORTED en verificación, y varios de
+# ellos SÍ contenían uno de estos conectores (ej. "aunque requieren mayor
+# cantidad...", "A pesar de la alta precisión...") pese a que la regla 11
+# ya le pide al LLM dividirlos "sin excepción". La regla existía solo como
+# instrucción de prompt, sin ningún respaldo mecánico -- dependía
+# enteramente de que el LLM la recordara y la aplicara, y en la práctica no
+# lo hacía de forma consistente. Este validador la convierte en un
+# requisito fail-closed real: una oración que contenga cualquiera de los
+# conectores de RULE_11_CONNECTORS se rechaza aquí, forzando al LLM a
+# regenerar la sección dividiéndola -- exactamente lo que la regla 11 ya
+# exigía, ahora con enforcement real en vez de depender de la memoria del
+# modelo. Reutiliza RULE_11_CONNECTORS (prompting.py) en vez de duplicar la
+# lista, para que el texto de la regla y su verificación nunca diverjan.
+_RULE_11_CONNECTOR_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(c) for c in RULE_11_CONNECTORS) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def validate_sentence_compound_connector(text: str) -> str | None:
+    """V2A02b -- rechaza (fail-closed) cualquier ``text`` que contenga uno
+    de los conectores de la regla 11 (``RULE_11_CONNECTORS``), sin
+    excepción -- igual que exige explícitamente esa regla en el prompt
+    ("sin excepción, incluso si la evidencia disponible respalda ambas
+    partes"). Nunca intenta dividir ni reparar la oración por su cuenta
+    -- eso sería una reparación silenciosa; solo reporta el error para que
+    el LLM regenere la sección con las afirmaciones ya separadas."""
+
+    if _RULE_11_CONNECTOR_RE.search(text):
+        return SENTENCE_ITEM_CONTAINS_COMPOUND_CONNECTOR
     return None
 
 
@@ -459,6 +497,14 @@ def validate_and_parse_sentences_v2(
         atomicity_error = validate_sentence_atomicity(text)
         if atomicity_error is not None:
             errors.append(f"{atomicity_error}:{index}")
+            continue
+
+        # 2b. Refuerzo mecánico de la regla 11 (conectores concesivos/
+        # adversativos "aunque", "a pesar de", "sin embargo", "mientras
+        # que", "pero") -- ver validate_sentence_compound_connector.
+        compound_connector_error = validate_sentence_compound_connector(text)
+        if compound_connector_error is not None:
+            errors.append(f"{compound_connector_error}:{index}")
             continue
 
         evidence_ids = list(item.get("supporting_evidence_ids") or [])
